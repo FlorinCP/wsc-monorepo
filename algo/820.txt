@@ -1,0 +1,210 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <thread>
+#include <algorithm>
+#include <chrono>
+#include <malloc/malloc.h>
+
+// Precomputed cell metadata
+static constexpr uint8_t preRow[81] = {
+    0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,
+    3,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,
+    6,6,6,6,6,6,6,6,6,7,7,7,7,7,7,7,7,7,8,8,8,8,8,8,8,8,8
+};
+
+static constexpr uint8_t preCol[81] = {
+    0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,8,
+    0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,8,
+    0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,8
+};
+
+static constexpr uint8_t preBox[81] = {
+    0,0,0,1,1,1,2,2,2,0,0,0,1,1,1,2,2,2,0,0,0,1,1,1,2,2,2,
+    3,3,3,4,4,4,5,5,5,3,3,3,4,4,4,5,5,5,3,3,3,4,4,4,5,5,5,
+    6,6,6,7,7,7,8,8,8,6,6,6,7,7,7,8,8,8,6,6,6,7,7,7,8,8,8
+};
+
+class SudokuSolver {
+    alignas(64) uint16_t rows[9] = {0};
+    alignas(64) uint16_t cols[9] = {0};
+    alignas(64) uint16_t boxes[9] = {0};
+    char grid[81];  // Fixed-size buffer
+    uint8_t emptyCells[81];  // Worst-case empty cells
+    uint8_t position[81];  // Tracking array
+    int emptyCount = 0;
+
+    // Bitmask operations
+    inline bool canPlace(int cell, int num) const {
+        const uint16_t mask = 1 << num;
+        return !(rows[preRow[cell]] & mask ||
+                cols[preCol[cell]] & mask ||
+                boxes[preBox[cell]] & mask);
+    }
+
+    inline void place(int cell, int num) {
+        const uint16_t mask = 1 << num;
+        rows[preRow[cell]] |= mask;
+        cols[preCol[cell]] |= mask;
+        boxes[preBox[cell]] |= mask;
+        grid[cell] = '0' + num;
+
+        // Remove from empty cells
+        const int pos = position[cell];
+        const uint8_t last = emptyCells[--emptyCount];
+        emptyCells[pos] = last;
+        position[last] = pos;
+    }
+
+    inline void remove(int cell, int num) {
+        const uint16_t mask = ~(1 << num);
+        rows[preRow[cell]] &= mask;
+        cols[preCol[cell]] &= mask;
+        boxes[preBox[cell]] &= mask;
+        grid[cell] = '0';
+
+        // Add back to empty cells
+        position[cell] = emptyCount;
+        emptyCells[emptyCount++] = cell;
+    }
+
+    // MRV heuristic with direct empty list access
+    int findMRV() const {
+        int minCount = 10, bestCell = -1;
+
+        for (int i = 0; i < emptyCount; ++i) {
+            const int cell = emptyCells[i];
+            const uint16_t used = rows[preRow[cell]] |
+                                cols[preCol[cell]] |
+                                boxes[preBox[cell]];
+            const int count = __builtin_popcount(~used & 0x3FE);
+
+            if (count == 0) return -1;
+            if (count < minCount) {
+                minCount = count;
+                bestCell = cell;
+                if (minCount == 1) break;
+            }
+        }
+        return bestCell;
+    }
+
+    bool solveInternal() {
+        if (emptyCount == 0) return true;
+
+        const int cell = findMRV();
+        if (cell == -1) return false;
+
+        const uint16_t used = rows[preRow[cell]] |
+                            cols[preCol[cell]] |
+                            boxes[preBox[cell]];
+        uint16_t possible = ~used & 0x3FE;
+
+        while (possible) {
+            const int num = __builtin_ctz(possible);
+            possible ^= (1 << num);
+
+            place(cell, num);
+            if (solveInternal()) return true;
+            remove(cell, num);
+        }
+        return false;
+    }
+
+public:
+    void initialize(const std::string& puzzle) {
+        emptyCount = 0;
+        std::fill(rows, rows+9, 0);
+        std::fill(cols, cols+9, 0);
+        std::fill(boxes, boxes+9, 0);
+
+        // First pass: handle pre-filled cells
+        for (int i = 0; i < 81; ++i) {
+            grid[i] = puzzle[i];
+            if (puzzle[i] != '0') {
+                const int num = puzzle[i] - '0';
+                rows[preRow[i]] |= (1 << num);
+                cols[preCol[i]] |= (1 << num);
+                boxes[preBox[i]] |= (1 << num);
+            }
+        }
+
+        // Second pass: build empty cells list
+        for (int i = 0; i < 81; ++i) {
+            if (puzzle[i] == '0') {
+                emptyCells[emptyCount] = i;
+                position[i] = emptyCount;
+                emptyCount++;
+            }
+        }
+    }
+
+    bool solve() { return solveInternal(); }
+    std::string getSolution() const { return std::string(grid, 81); }
+};
+
+class ResultsManager {
+    std::vector<std::string> results;
+public:
+    ResultsManager(size_t size) : results(size) {}
+    void setResult(size_t index, std::string solution) {
+        results[index] = std::move(solution);
+    }
+    const std::vector<std::string>& getResults() const { return results; }
+};
+
+void solverWorker(const std::vector<std::string>& puzzles,
+                 ResultsManager& manager,
+                 size_t start, size_t end) {
+    SudokuSolver solver;
+    for (size_t i = start; i < end; ++i) {
+        solver.initialize(puzzles[i]);
+        solver.solve();
+        manager.setResult(i, solver.getSolution());
+    }
+}
+
+// __attribute__((constructor)) static void disable_nano_alloc() {
+//     malloc_zone_unregister(malloc_default_zone());
+// }
+
+int main() {
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    std::ifstream input("/Users/florinpeana/CLionProjects/wsc25/input.txt");
+    if (!input) return 1;
+
+    std::vector<std::string> puzzles;
+    std::string line;
+    while (std::getline(input, line)) {
+        line.erase(std::remove_if(line.begin(), line.end(),
+            [](unsigned char c) { return std::isspace(c); }), line.end());
+        if (line.size() == 81) puzzles.push_back(line);
+    }
+
+    const unsigned threads = std::max(1u,
+        std::min<unsigned>(std::thread::hardware_concurrency(), puzzles.size()));
+    ResultsManager results(puzzles.size());
+    std::vector<std::thread> workers;
+    const size_t chunk = puzzles.size() / threads;
+    const size_t extra = puzzles.size() % threads;
+
+    for (size_t i = 0, start = 0; i < threads; ++i) {
+        const size_t end = start + chunk + (i < extra);
+        workers.emplace_back(solverWorker,
+            std::ref(puzzles), std::ref(results), start, end);
+        start = end;
+    }
+
+    for (auto& t : workers) t.join();
+
+    std::ofstream output("output.txt");
+    for (const auto& s : results.getResults()) output << s << '\n';
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - startTime).count();
+    std::cout << "Solved " << puzzles.size() << " puzzles in " << duration << " ms\n";
+}
+
+

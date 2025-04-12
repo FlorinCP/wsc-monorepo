@@ -1,0 +1,179 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <thread>
+#include <algorithm>
+#include <chrono>
+
+class SudokuSolver {
+    uint16_t rows[9] = {0};
+    uint16_t cols[9] = {0};
+    uint16_t boxes[9] = {0};
+    char grid[81];
+    uint64_t emptyCells[2] = {0};
+
+    // Precomputed cell metadata
+    struct CellMeta {
+        int row, col, box;
+        uint16_t *row_ptr, *col_ptr, *box_ptr;
+    } cellData[81];
+
+    // Bitmask operations
+    inline bool canPlace(int cell, int num) const {
+        const auto& m = cellData[cell];
+        uint16_t mask = 1 << num;
+        return !(*(m.row_ptr) & mask || *(m.col_ptr) & mask || *(m.box_ptr) & mask);
+    }
+
+    inline void place(int cell, int num) {
+        const auto& m = cellData[cell];
+        uint16_t mask = 1 << num;
+        *(m.row_ptr) |= mask;
+        *(m.col_ptr) |= mask;
+        *(m.box_ptr) |= mask;
+        grid[cell] = '0' + num;
+        emptyCells[cell >> 6] &= ~(1ULL << (cell & 63));
+    }
+
+    inline void remove(int cell, int num) {
+        const auto& m = cellData[cell];
+        uint16_t mask = ~(1 << num);
+        *(m.row_ptr) &= mask;
+        *(m.col_ptr) &= mask;
+        *(m.box_ptr) &= mask;
+        grid[cell] = '0';
+        emptyCells[cell >> 6] |= (1ULL << (cell & 63));
+    }
+
+    // MRV with bit-scanning
+    int findMRV() const {
+        int minCount = 10, bestCell = -1;
+
+        for (int chunk = 0; chunk < 2; ++chunk) {
+            uint64_t bits = emptyCells[chunk];
+            while (bits) {
+                uint64_t lsb = bits & -bits;
+                int cell = __builtin_ctzll(bits) + (chunk << 6);
+                bits ^= lsb;
+                if (cell >= 81) continue;
+
+                const auto& m = cellData[cell];
+                uint16_t used = *m.row_ptr | *m.col_ptr | *m.box_ptr;
+                int possible = (~used) & 0x3FE;
+                int count = __builtin_popcount(possible);
+
+                if (count == 0) return -1;
+                if (count < minCount) {
+                    minCount = count;
+                    bestCell = cell;
+                    if (minCount == 1) return bestCell;
+                }
+            }
+        }
+        return bestCell;
+    }
+
+    bool solveInternal() {
+        int cell = findMRV();
+        if (cell == -1) return true;
+
+        const auto& m = cellData[cell];
+        uint16_t used = *m.row_ptr | *m.col_ptr | *m.box_ptr;
+        int possible = (~used) & 0x3FE;
+
+        while (possible) {
+            int bit = possible & -possible;
+            int num = __builtin_ctz(bit);
+            possible ^= bit;
+
+            place(cell, num);
+            if (solveInternal()) return true;
+            remove(cell, num);
+        }
+        return false;
+    }
+
+public:
+    SudokuSolver() {
+        for (int i = 0; i < 81; ++i) {
+            int row = i / 9;
+            int col = i % 9;
+            int box = (row / 3) * 3 + (col / 3);
+            cellData[i] = {row, col, box, &rows[row], &cols[col], &boxes[box]};
+        }
+        std::fill(grid, grid + 81, '0');
+    }
+
+    void initialize(const std::string& puzzle) {
+        std::fill(rows, rows + 9, 0);
+        std::fill(cols, cols + 9, 0);
+        std::fill(boxes, boxes + 9, 0);
+        emptyCells[0] = emptyCells[1] = 0;
+
+        for (int i = 0; i < 81; ++i) {
+            grid[i] = puzzle[i];
+            if (puzzle[i] != '0') {
+                place(i, puzzle[i] - '0');
+            } else {
+                emptyCells[i >> 6] |= 1ULL << (i & 63);
+            }
+        }
+    }
+
+    bool solve() { return solveInternal(); }
+    std::string getSolution() const { return std::string(grid, 81); }
+};
+
+class ResultsManager {
+    std::vector<std::string> results;
+public:
+    ResultsManager(size_t size) : results(size) {}
+    void setResult(size_t index, std::string solution) { results[index] = std::move(solution); }
+    const std::vector<std::string>& getResults() const { return results; }
+};
+
+void solverWorker(const std::vector<std::string>& puzzles, ResultsManager& manager, size_t start, size_t end) {
+    SudokuSolver solver;
+    for (size_t i = start; i < end; ++i) {
+        solver.initialize(puzzles[i]);
+        solver.solve();
+        manager.setResult(i, solver.getSolution());
+    }
+}
+
+int main() {
+    auto start = std::chrono::high_resolution_clock::now();
+
+    std::ifstream input("/Users/florinpeana/CLionProjects/wsc25/input.txt");
+    if (!input) return 1;
+
+    std::vector<std::string> puzzles;
+    std::string line;
+    while (std::getline(input, line)) {
+        line.erase(std::remove_if(line.begin(), line.end(),
+            [](unsigned char c) { return std::isspace(c); }), line.end());
+        if (line.size() == 81) puzzles.push_back(line);
+    }
+
+    unsigned threads = std::max(1u, std::min<unsigned>(std::thread::hardware_concurrency(), puzzles.size()));
+    ResultsManager results(puzzles.size());
+    std::vector<std::thread> workers;
+    size_t chunk = puzzles.size() / threads;
+    size_t extra = puzzles.size() % threads;
+
+    for (size_t i = 0, start = 0; i < threads; ++i) {
+        size_t end = start + chunk + (i < extra);
+        workers.emplace_back(solverWorker, std::ref(puzzles), std::ref(results), start, end);
+        start = end;
+    }
+
+    for (auto& t : workers) t.join();
+
+    std::ofstream output("output.txt");
+    for (const auto& s : results.getResults()) output << s << '\n';
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start).count();
+    std::cout << "Solved " << puzzles.size() << " puzzles in " << duration << " ms\n";
+}

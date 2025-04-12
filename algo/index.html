@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebAssembly Sudoku Solver</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        #sudoku-grid {
+            display: grid;
+            grid-template-columns: repeat(9, 40px);
+            grid-template-rows: repeat(9, 40px);
+            gap: 1px;
+            margin: 20px auto;
+        }
+
+        .cell {
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #ccc;
+            font-size: 18px;
+        }
+
+        .cell input {
+            width: 90%;
+            height: 90%;
+            border: none;
+            text-align: center;
+            font-size: 18px;
+        }
+
+        /* Add thicker borders between 3x3 blocks */
+        .cell[data-col="2"], .cell[data-col="5"] {
+            border-right: 2px solid #333;
+        }
+
+        .cell[data-row="2"], .cell[data-row="5"] {
+            border-bottom: 2px solid #333;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        button {
+            padding: 10px 15px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        #status {
+            text-align: center;
+            margin-top: 20px;
+            min-height: 24px;
+        }
+
+        #file-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        #puzzle-selector {
+            margin: 20px 0;
+            text-align: center;
+            display: none;
+        }
+
+        .progress-container {
+            width: 100%;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .progress-stats {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            font-size: 14px;
+        }
+
+        #bulk-container {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+            display: none;
+        }
+
+        #bulk-container h2 {
+            margin-top: 0;
+        }
+
+        .batch-options {
+            margin: 15px 0;
+        }
+
+        #batch-size {
+            width: 80px;
+        }
+
+        #bulk-solve-btn, #stop-btn, #download-btn {
+            display: block;
+            margin: 15px auto;
+            padding: 12px 25px;
+            font-size: 16px;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #bulk-solve-btn {
+            background-color: #4CAF50;
+        }
+
+        #bulk-solve-btn:hover {
+            background-color: #45a049;
+        }
+
+        #stop-btn {
+            background-color: #f44336;
+            display: none;
+        }
+
+        #stop-btn:hover {
+            background-color: #d32f2f;
+        }
+
+        #download-btn {
+            background-color: #2196F3;
+            display: none;
+        }
+
+        #download-btn:hover {
+            background-color: #0b7dda;
+        }
+
+        .solving-stats {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #e8f5e9;
+            border-radius: 5px;
+            display: none;
+        }
+
+        #threading-info {
+            background-color: #e3f2fd;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<h1>WebAssembly Sudoku Solver (Multithreaded)</h1>
+
+<div id="threading-info">
+    <p>Using multithreaded batch processing for maximum performance</p>
+</div>
+
+<div id="file-container">
+    <p>Load a text file with Sudoku puzzles (one per line, 81 characters each):</p>
+    <input type="file" id="puzzle-file" accept=".txt">
+</div>
+
+<div id="puzzle-selector">
+    <label for="puzzle-select">Select puzzle: </label>
+    <select id="puzzle-select"></select>
+    <button id="load-selected">Load Selected</button>
+</div>
+
+<div id="sudoku-grid"></div>
+
+<div class="controls">
+    <button id="solve-btn">Solve Current</button>
+    <button id="clear-btn">Clear</button>
+</div>
+
+<div id="status"></div>
+
+<div id="bulk-container">
+    <h2>Bulk Solving</h2>
+    <p>Loaded <span id="puzzle-count">0</span> puzzles</p>
+
+    <div class="batch-options">
+        <label for="batch-size">Batch Size:</label>
+        <input type="number" id="batch-size" value="5000" min="100" max="50000">
+        <span class="help-text">(Larger batches are more efficient with multithreading)</span>
+    </div>
+
+    <button id="bulk-solve-btn">Solve All Puzzles</button>
+    <button id="stop-btn">Stop Processing</button>
+    <button id="download-btn">Download Solutions</button>
+
+    <div class="progress-container">
+        <div class="progress-bar">
+            <div class="progress-fill"></div>
+        </div>
+        <div class="progress-stats">
+            <span id="progress-text">0/0 (0%)</span>
+            <span id="time-remaining">Estimating...</span>
+        </div>
+    </div>
+
+    <div class="solving-stats">
+        <p>Solved: <span id="solved-count">0</span> / <span id="total-processed">0</span> puzzles</p>
+        <p>Average solving time: <span id="avg-time">0</span> ms per puzzle</p>
+        <p>Total time: <span id="total-time">0</span> seconds</p>
+        <p>Estimated completion: <span id="completion-time">Calculating...</span></p>
+    </div>
+</div>
+
+<script>
+    // Global variables
+    let puzzleArray = []; // Store puzzles as array
+    let solutionArray = []; // Store solutions
+    let puzzleCount = 0;
+    let solveSudoku;
+    let solveBatch;
+    let allocateInputBuffer;
+    let allocateOutputBuffer;
+    let allocateSolvedFlags;
+    let freeAllBuffers;
+    let setPuzzle;
+    let getSolution;
+    let wasSolved;
+    let getCompletedThreadCount;
+    let requestStop;
+    let resetStopFlag;
+    let processing = false;
+    let currentIndex = 0;
+    let solvedCount = 0;
+    let totalSolveTime = 0;
+    let startTime;
+    let batchSize = 5000;
+    let stopRequested = false;
+    let progressCheckInterval = null;
+
+    // Create the Sudoku grid
+    const grid = document.getElementById('sudoku-grid');
+
+    for (let row = 0; row < 9; row++) {
+        for (let col = 0; col < 9; col++) {
+            const cell = document.createElement('div');
+            cell.className = 'cell';
+            cell.setAttribute('data-row', row);
+            cell.setAttribute('data-col', col);
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.maxLength = 1;
+            input.pattern = '[1-9]';
+
+            // Validate input to only allow numbers 1-9
+            input.addEventListener('input', function() {
+                this.value = this.value.replace(/[^1-9]/g, '');
+            });
+
+            cell.appendChild(input);
+            grid.appendChild(cell);
+        }
+    }
+
+    // Get puzzle string from the grid
+    function getPuzzleString() {
+        let puzzle = '';
+        for (let row = 0; row < 9; row++) {
+            for (let col = 0; col < 9; col++) {
+                const input = document.querySelector(`.cell[data-row="${row}"][data-col="${col}"] input`);
+                puzzle += input.value || '0';
+            }
+        }
+        return puzzle;
+    }
+
+    // Fill the grid with a puzzle or solution
+    function fillGrid(puzzleString) {
+        for (let i = 0; i < 81; i++) {
+            const row = Math.floor(i / 9);
+            const col = i % 9;
+            const input = document.querySelector(`.cell[data-row="${row}"][data-col="${col}"] input`);
+            input.value = puzzleString[i] === '0' ? '' : puzzleString[i];
+        }
+    }
+
+    // Clear the grid
+    document.getElementById('clear-btn').addEventListener('click', function() {
+        const inputs = document.querySelectorAll('#sudoku-grid input');
+        inputs.forEach(input => input.value = '');
+        document.getElementById('status').textContent = '';
+    });
+
+    // File input handler
+    document.getElementById('puzzle-file').addEventListener('change', function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const content = e.target.result;
+
+            // Split by newlines and filter valid puzzles
+            puzzleArray = content.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length === 81);
+
+            puzzleCount = puzzleArray.length;
+            solutionArray = new Array(puzzleCount).fill('');
+
+            if (puzzleCount === 0) {
+                document.getElementById('status').textContent = 'No valid puzzles found in the file';
+                return;
+            }
+
+            document.getElementById('status').textContent = `Loaded ${puzzleCount} puzzles from file`;
+            document.getElementById('puzzle-count').textContent = puzzleCount;
+
+            // Populate the select dropdown (with limited options for large files)
+            const select = document.getElementById('puzzle-select');
+            select.innerHTML = '';
+
+            const maxOptionsToShow = Math.min(100, puzzleCount);
+            for (let i = 0; i < maxOptionsToShow; i++) {
+                const option = document.createElement('option');
+                option.value = i;
+                option.textContent = `Puzzle ${i + 1}`;
+                select.appendChild(option);
+            }
+
+            if (puzzleCount > maxOptionsToShow) {
+                const option = document.createElement('option');
+                option.disabled = true;
+                option.textContent = `... ${puzzleCount - maxOptionsToShow} more puzzles ...`;
+                select.appendChild(option);
+            }
+
+            document.getElementById('puzzle-selector').style.display = 'block';
+            document.getElementById('bulk-container').style.display = 'block';
+
+            // Load the first puzzle
+            if (puzzleCount > 0) {
+                fillGrid(puzzleArray[0]);
+            }
+        };
+
+        reader.readAsText(file);
+    });
+
+    // Load selected puzzle button
+    document.getElementById('load-selected').addEventListener('click', function() {
+        const index = parseInt(document.getElementById('puzzle-select').value);
+        if (index >= 0 && index < puzzleCount) {
+            fillGrid(puzzleArray[index]);
+            document.getElementById('status').textContent = `Loaded puzzle ${index + 1}`;
+        }
+    });
+
+    // Solve the current puzzle
+    document.getElementById('solve-btn').addEventListener('click', function() {
+        if (!solveSudoku) {
+            document.getElementById('status').textContent = 'WebAssembly module not loaded yet';
+            return;
+        }
+
+        const puzzleString = getPuzzleString();
+        document.getElementById('status').textContent = 'Solving...';
+
+        setTimeout(() => {
+            try {
+                const startTime = performance.now();
+                const solution = solveSudoku(puzzleString);
+                const endTime = performance.now();
+                const duration = (endTime - startTime).toFixed(2);
+
+                if (solution && solution !== "No solution found") {
+                    fillGrid(solution);
+                    document.getElementById('status').textContent = `Solved in ${duration} ms`;
+                } else {
+                    document.getElementById('status').textContent = 'No solution found';
+                }
+            } catch (error) {
+                document.getElementById('status').textContent = 'Error: ' + error.message;
+                console.error(error);
+            }
+        }, 10);
+    });
+
+    // Process a batch of puzzles using multithreaded batch processing
+    async function processBatch(startIdx, count) {
+        const batchStartTime = performance.now();
+
+        try {
+            // Calculate actual batch size
+            const actualCount = Math.min(count, puzzleCount - startIdx);
+
+            // Reset progress monitoring variables
+            resetStopFlag();
+
+            // Allocate buffers if needed
+            allocateInputBuffer(actualCount * 81);
+            allocateOutputBuffer(actualCount * 81);
+            allocateSolvedFlags(actualCount);
+
+            // Fill input buffer with puzzles
+            for (let i = 0; i < actualCount; i++) {
+                setPuzzle(i, puzzleArray[startIdx + i]);
+            }
+
+            // Process the batch in a single WebAssembly call (with threads)
+            const startProcessingTime = performance.now();
+            const batchSolvedCount = solveBatch(actualCount);
+            const endProcessingTime = performance.now();
+
+            if (batchSolvedCount < 0) {
+                throw new Error("Batch processing failed, buffer allocation error");
+            }
+
+            // Extract solutions from output buffer
+            for (let i = 0; i < actualCount; i++) {
+                if (wasSolved(i)) {
+                    solutionArray[startIdx + i] = getSolution(i);
+                    solvedCount++;
+                }
+            }
+
+            currentIndex = startIdx + actualCount;
+
+            const batchEndTime = performance.now();
+            totalSolveTime += (batchEndTime - batchStartTime);
+
+            updateProgress();
+            return batchSolvedCount;
+        } catch (error) {
+            console.error("Batch processing error:", error);
+            document.getElementById('status').textContent = `Error: ${error.message}`;
+            return 0;
+        }
+    }
+
+    // Update progress UI
+    function updateProgress() {
+        const progressPercent = (currentIndex / puzzleCount * 100).toFixed(1);
+        document.querySelector('.progress-fill').style.width = `${progressPercent}%`;
+
+        document.getElementById('progress-text').textContent =
+            `${currentIndex}/${puzzleCount} (${progressPercent}%)`;
+
+        document.getElementById('solved-count').textContent = solvedCount;
+        document.getElementById('total-processed').textContent = currentIndex;
+
+        if (currentIndex > 0) {
+            const avgTime = (totalSolveTime / currentIndex).toFixed(2);
+            document.getElementById('avg-time').textContent = avgTime;
+
+            const elapsedSeconds = (performance.now() - startTime) / 1000;
+            document.getElementById('total-time').textContent = elapsedSeconds.toFixed(1);
+
+            // Estimate remaining time
+            if (currentIndex < puzzleCount) {
+                const remainingPuzzles = puzzleCount - currentIndex;
+                const estimatedSecondsRemaining = remainingPuzzles * (totalSolveTime / currentIndex / 1000);
+
+                let remainingText = '';
+                if (estimatedSecondsRemaining < 60) {
+                    remainingText = `${estimatedSecondsRemaining.toFixed(1)} seconds`;
+                } else if (estimatedSecondsRemaining < 3600) {
+                    remainingText = `${(estimatedSecondsRemaining / 60).toFixed(1)} minutes`;
+                } else {
+                    remainingText = `${(estimatedSecondsRemaining / 3600).toFixed(1)} hours`;
+                }
+
+                document.getElementById('time-remaining').textContent = `Est. remaining: ${remainingText}`;
+
+                // Calculate estimated completion time
+                const completionDate = new Date(Date.now() + (estimatedSecondsRemaining * 1000));
+                document.getElementById('completion-time').textContent = completionDate.toLocaleTimeString();
+            } else {
+                document.getElementById('time-remaining').textContent = 'Complete!';
+                document.getElementById('completion-time').textContent = 'Done';
+            }
+        }
+    }
+
+    // Bulk solve all puzzles
+    document.getElementById('bulk-solve-btn').addEventListener('click', async function() {
+        if (!solveBatch || !allocateInputBuffer || !allocateOutputBuffer || !allocateSolvedFlags) {
+            document.getElementById('status').textContent = 'WebAssembly module not loaded yet';
+            return;
+        }
+
+        if (puzzleCount === 0) {
+            document.getElementById('status').textContent = 'No puzzles loaded';
+            return;
+        }
+
+        if (processing) {
+            document.getElementById('status').textContent = 'Already processing puzzles';
+            return;
+        }
+
+        // Get batch size
+        batchSize = parseInt(document.getElementById('batch-size').value) || 5000;
+        batchSize = Math.max(100, Math.min(150000, batchSize));
+        document.getElementById('batch-size').value = batchSize;
+
+        // Reset state
+        processing = true;
+        stopRequested = false;
+        currentIndex = 0;
+        solvedCount = 0;
+        totalSolveTime = 0;
+        startTime = performance.now();
+        solutionArray = new Array(puzzleCount).fill('');
+
+        // Update UI
+        document.getElementById('bulk-solve-btn').style.display = 'none';
+        document.getElementById('stop-btn').style.display = 'block';
+        document.getElementById('download-btn').style.display = 'none';
+        document.getElementById('status').textContent = `Processing ${puzzleCount} puzzles in batches of ${batchSize}...`;
+        document.querySelector('.progress-container').style.display = 'block';
+        document.querySelector('.solving-stats').style.display = 'block';
+
+        try {
+            // Process puzzles in batches
+            while (currentIndex < puzzleCount && !stopRequested) {
+                const currentBatchSize = Math.min(batchSize, puzzleCount - currentIndex);
+
+                // Process this batch
+                await processBatch(currentIndex, currentBatchSize);
+
+                // Yield to UI thread
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+
+            const totalTime = ((performance.now() - startTime) / 1000).toFixed(1);
+
+            if (stopRequested) {
+                document.getElementById('status').textContent =
+                    `Processing stopped. Solved ${solvedCount} of ${currentIndex} processed puzzles in ${totalTime} seconds.`;
+            } else {
+                document.getElementById('status').textContent =
+                    `Processing complete. Solved ${solvedCount} of ${puzzleCount} puzzles in ${totalTime} seconds.`;
+            }
+
+            // Enable download button if any puzzles were solved
+            if (solvedCount > 0) {
+                document.getElementById('download-btn').style.display = 'block';
+            }
+        } catch (error) {
+            document.getElementById('status').textContent = 'Error during processing: ' + error.message;
+            console.error('Processing error:', error);
+        } finally {
+            processing = false;
+            document.getElementById('bulk-solve-btn').style.display = 'block';
+            document.getElementById('stop-btn').style.display = 'none';
+
+            // Clean up WebAssembly memory
+            freeAllBuffers();
+        }
+    });
+
+    // Stop processing
+    document.getElementById('stop-btn').addEventListener('click', function() {
+        stopRequested = true;
+        requestStop(); // Signal WebAssembly threads to stop
+        document.getElementById('status').textContent = 'Stopping after current batch...';
+    });
+
+    // Download solutions
+    document.getElementById('download-btn').addEventListener('click', function() {
+        if (solvedCount === 0) {
+            alert('No solutions to download');
+            return;
+        }
+
+        // Filter out empty solutions
+        const validSolutions = solutionArray.filter(solution => solution && solution.length === 81);
+
+        // Create blob and download
+        const blob = new Blob([validSolutions.join('\n')], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'sudoku_solutions.txt';
+        document.body.appendChild(a);
+        a.click();
+
+        // Cleanup
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
+    });
+
+    // Initialize the WebAssembly module when it's ready
+    Module = {
+        onRuntimeInitialized: function() {
+            // Initialize functions
+            solveSudoku = Module.cwrap('solveSudoku', 'string', ['string']);
+            solveBatch = Module.cwrap('solveBatch', 'number', ['number']);
+            allocateInputBuffer = Module.cwrap('allocateInputBuffer', null, ['number']);
+            allocateOutputBuffer = Module.cwrap('allocateOutputBuffer', null, ['number']);
+            allocateSolvedFlags = Module.cwrap('allocateSolvedFlags', null, ['number']);
+            freeAllBuffers = Module.cwrap('freeAllBuffers', null, []);
+            setPuzzle = Module.cwrap('setPuzzle', null, ['number', 'string']);
+            getSolution = Module.cwrap('getSolution', 'string', ['number']);
+            wasSolved = Module.cwrap('wasSolved', 'boolean', ['number']);
+            getCompletedThreadCount = Module.cwrap('getCompletedThreadCount', 'number', []);
+            requestStop = Module.cwrap('requestStop', null, []);
+            resetStopFlag = Module.cwrap('resetStopFlag', null, []);
+
+            document.getElementById('status').textContent = 'WebAssembly module loaded with multithreaded batch processing support';
+        }
+    };
+</script>
+<script src="sudoku_pt.js"></script>
+</body>
+</html>
