@@ -13,4 +13,4 @@ elseif(WIN32)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=tigerlake -mtune=tigerlake -flto -pthread")
 endif()
 
-add_executable(wsc25 main.cpp)
+add_executable(wsc25 stable/main.cpp)
