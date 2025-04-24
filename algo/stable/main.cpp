@@ -7,6 +7,33 @@
 #include <chrono>
 #include <cstring>
 #include <array>
+#include <mach/mach.h>
+
+size_t getCurrentRSS() {
+    task_basic_info info;
+    mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+    kern_return_t err = task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count);
+    return (err == KERN_SUCCESS) ? info.resident_size : 0;
+}
+
+static size_t totalAllocated = 0;
+
+void* operator new(size_t size) {
+    totalAllocated += size;
+    return malloc(size);
+}
+
+void operator delete(void* p) noexcept {
+    free(p);
+}
+
+void reportHeapUsage() {
+    std::cout << "Heap memory allocated: " << totalAllocated / 1024 << " KB\n";
+}
+
+void reportMemoryUsage() {
+    std::cout << "Memory usage: " << getCurrentRSS() / 1024 << " KB\n";
+}
 
 struct CellInfo {
     uint8_t row, col, box;
@@ -153,8 +180,9 @@ void solverWorker(const std::vector<std::string>& puzzles, ResultsManager& manag
 
 int main() {
     auto startTime = std::chrono::high_resolution_clock::now();
+    reportMemoryUsage(); // Initial memory
 
-    std::ifstream input("input_hard.txt");
+    std::ifstream input("input.txt");
     if (!input) return 1;
 
     std::vector<std::string> puzzles;
@@ -178,6 +206,9 @@ int main() {
     }
 
     for (auto& t : workers) t.join();
+
+    reportMemoryUsage();
+    reportHeapUsage();
 
     std::ofstream output("output.txt");
     for (const auto& s : results.getResults()) {

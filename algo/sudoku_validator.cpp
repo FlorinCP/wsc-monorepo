@@ -85,7 +85,7 @@ void validatorWorker(const std::vector<std::string>& puzzles, ResultsManager& re
 int main() {
     auto startTime = std::chrono::high_resolution_clock::now();
 
-    std::ifstream input("output_hard.txt");
+    std::ifstream input("output.txt");
     if (!input) {
         std::cerr << "Error: Cannot open input file." << std::endl;
         return 1;
@@ -118,16 +118,30 @@ int main() {
 
     for (auto& t : workers) t.join();
 
+    // Count valid and invalid puzzles
+    int validCount = 0, invalidCount = 0;
+    for (const auto& result : results.getResults()) {
+        if (result == "Valid") validCount++;
+        else invalidCount++;
+    }
+
     // Write results to output file
     std::ofstream output("validation_results.txt");
     for (size_t i = 0; i < results.getResults().size(); ++i) {
         output << "Puzzle " << (i + 1) << ": " << results.getResults()[i] << '\n';
     }
 
+    // Write summary to output file
+    output << "\nSummary:\n";
+    output << "Valid puzzles: " << validCount << '\n';
+    output << "Invalid puzzles: " << invalidCount << '\n';
+
     // Calculate and display execution time
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - startTime).count();
     std::cout << "Validated " << puzzles.size() << " puzzles in " << duration << " ms\n";
+    std::cout << "Valid puzzles: " << validCount << "\n";
+    std::cout << "Invalid puzzles: " << invalidCount << "\n";
 
     return 0;
 }
