@@ -7,11 +7,10 @@
 #include <chrono>
 #include <cstring>
 #include <array>
-#include <mutex> // Needed for output synchronization
-#include <atomic> // For tracking solved count safely
-#include <numeric> // For std::gcd in newer versions or fallback for calculating chunk size more robustly (optional)
+#include <mutex>
+#include <atomic>
+#include <numeric>
 
-// macOS specific memory reporting - keep for comparison
 #ifdef __APPLE__
 #include <mach/mach.h>
 size_t getCurrentRSS() {
@@ -21,7 +20,6 @@ size_t getCurrentRSS() {
     return (err == KERN_SUCCESS) ? info.resident_size : 0;
 }
 #else
-// Provide a dummy or Linux/Windows implementation if needed elsewhere
 size_t getCurrentRSS() {
     // On Linux, you might read /proc/self/statm or use getrusage
     // On Windows, use GetProcessMemoryInfo
@@ -55,7 +53,6 @@ struct CellInfo {
     uint8_t row, col, box;
 };
 
-// preCell remains the same (read-only static data, low memory impact)
 static constexpr CellInfo preCell[81] = {
     {0,0,0}, {0,1,0}, {0,2,0}, {0,3,1}, {0,4,1}, {0,5,1}, {0,6,2}, {0,7,2}, {0,8,2},
     {1,0,0}, {1,1,0}, {1,2,0}, {1,3,1}, {1,4,1}, {1,5,1}, {1,6,2}, {1,7,2}, {1,8,2},
@@ -70,16 +67,14 @@ static constexpr CellInfo preCell[81] = {
 
 
 class SudokuSolver {
-    // Using alignas is fine, minimal memory overhead but potential performance gain
     alignas(64) uint16_t rows[9] = {0};
     alignas(64) uint16_t cols[9] = {0};
     alignas(64) uint16_t boxes[9] = {0};
-    char grid[81]; // Stores the current state of the puzzle being solved
+    char grid[81];
     uint8_t emptyCells[81];
     uint8_t position[81];
     int emptyCount = 0;
 
-    // Using inline is preferred over compiler-specific attributes unless proven necessary
     inline bool canPlace(int cell, int num) const {
         const uint16_t mask = 1 << num;
         const auto& info = preCell[cell];
@@ -94,23 +89,21 @@ class SudokuSolver {
         boxes[info.box] |= mask;
         grid[cell] = '0' + num;
 
-        // Correctly remove the cell from the empty list
-        if (emptyCount > 0) { // Should always be true if placing based on findMRV
+        if (emptyCount > 0) {
             const int pos = position[cell];
-            // Ensure pos is valid *before* decrementing emptyCount
             if (pos < emptyCount) {
                 const uint8_t last_cell_index = emptyCells[emptyCount - 1];
-                emptyCells[pos] = last_cell_index; // Move last cell to the vacated spot
-                position[last_cell_index] = pos;   // Update position of the moved cell
+                emptyCells[pos] = last_cell_index;
+                position[last_cell_index] = pos;
             }
-            emptyCount--; // Now decrement count
+            emptyCount--;
         }
     }
 
 
     inline void remove(int cell, int num) {
         const auto& info = preCell[cell];
-        const uint16_t mask = ~(1 << num); // Create mask by inverting the single bit
+        const uint16_t mask = ~(1 << num);
         rows[info.row] &= mask;
         cols[info.col] &= mask;
         boxes[info.box] &= mask;
@@ -406,7 +399,7 @@ int main(int argc, char* argv[]) { // Allow command-line args for files
     // --- Stage 2: Setup Workers ---
     // Determine number of threads
     unsigned hardware_threads = std::thread::hardware_concurrency();
-    const unsigned numThreads = std::max(1u, hardware_threads > 0 ? hardware_threads : 1); // Use at least 1 thread
+    const unsigned numThreads = 6; // Use at least 1 thread
 
     std::vector<std::thread> workers;
     std::ofstream outputFile(outputFilename); // Open output file *once*
